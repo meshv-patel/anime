@@ -1,0 +1,51 @@
+{
+  "name": "anime-together",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:staging": "vite --mode staging --port 5174",
+    "dev:demo": "vite --mode demo --port 5175",
+    "build": "tsc --noEmit && vite build",
+    "build:staging": "tsc --noEmit && vite build --mode staging",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "verify:target": "node scripts/verify-build-target.cjs",
+    "test:sync": "tsx scripts/sync-selftest.ts",
+    "test:tabs": "tsx scripts/local-two-tabs-test.ts",
+    "test:bingo": "tsx scripts/bingo-test.ts",
+    "test:predictions": "tsx scripts/predictions-test.ts",
+    "test:security": "tsx scripts/security-test.ts",
+    "test:adversarial": "tsx scripts/adversarial-security-test.ts",
+    "test:realtime": "tsx scripts/realtime-auth-test.ts",
+    "test:screenshare": "tsx scripts/screen-share-test.ts",
+    "test:furin": "tsx scripts/furin-test.ts",
+    "test:season": "tsx scripts/season-test.ts",
+    "test:ema": "tsx scripts/ema-test.ts",
+    "test:preview": "tsx scripts/fullscreen-preview-test.ts",
+    "test:db": "tsx scripts/real-postgres-test.ts",
+    "test:remediation": "tsx scripts/security-remediation-test.ts",
+    "test": "npm run test:sync && npm run test:tabs && npm run test:bingo && npm run test:predictions && npm run test:security && npm run test:adversarial && npm run test:realtime && npm run test:screenshare && npm run test:preview && npm run test:furin && npm run test:season && npm run test:ema && npm run test:remediation"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "framer-motion": "^11.3.0",
+    "hls.js": "^1.5.13",
+    "lucide-react": "^0.441.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IndexedDB Cross-Tab / Concurrent Allocator Test</title>
+  <style>
+    body { font-family: monospace; background: #1a1a24; color: #f0f0f5; padding: 24px; }
+    h1 { color: #ffb86b; font-size: 20px; }
+    .pass { color: #4ade80; margin: 4px 0; }
+    .fail { color: #f87171; margin: 4px 0; font-weight: bold; }
+    .summary { margin-top: 16px; padding: 12px; border-radius: 8px; font-weight: bold; }
+    .summary.ok { background: rgba(74, 222, 128, 0.15); border: 1px solid #4ade80; color: #4ade80; }
+    .summary.err { background: rgba(248, 113, 113, 0.15); border: 1px solid #f87171; color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Anime Together — Real IndexedDB Cross-Context Concurrency Test</h1>
+  <div id="results">Running tests...</div>
+
+  <script type="module">
+    const resultsEl = document.getElementById('results');
+    resultsEl.innerHTML = '';
+    let passed = 0;
+    let failed = 0;
+
+    function check(label, condition, detail = '') {
+      const div = document.createElement('div');
+      if (condition) {
+        div.className = 'pass';
+        div.textContent = ` PASS  ${label} ${detail}`;
+        passed++;
+      } else {
+        div.className = 'fail';
+        div.textContent = ` FAIL  ${label} ${detail}`;
+        failed++;
+      }
+      resultsEl.appendChild(div);
+    }
+
+    // ── Direct IndexedDB Allocator Logic matching src/lib/security.ts ──
+    const DB_NAME = 'anime_together_security_test_db';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'host_sequences';
+
+    function openDb() {
+      return new Promise((resolve, reject) => {
+        const req = window.indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function withIdbStore(mode, fn) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, mode);
+        const store = tx.objectStore(STORE_NAME);
+        let result;
+        fn(store)
+          .then((val) => { result = val; })
+          .catch((err) => {
+            try { tx.abort(); } catch {}
+            reject(err);
+          });
+        tx.oncomplete = () => { db.close(); resolve(result); };
+        tx.onerror = () => { db.close(); reject(tx.error || new Error('IDB transaction failed')); };
+        tx.onabort = () => { db.close(); reject(tx.error || new Error('IDB transaction aborted')); };
+      });
+    }
+
+    // Core atomic allocation function
+    async function allocateHostSequence(roomId, epoch, initialBaseline = 0) {
+      const key = `${roomId}:${epoch}:host`;
+      return withIdbStore('readwrite', async (store) => {
+        const req = store.get(key);
+        const existing = await new Promise((res, rej) => {
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => rej(req.error);
+        });
+        const current = (existing && typeof existing.seq === 'number' && Number.isFinite(existing.seq))
+          ? existing.seq
+          : Math.max(initialBaseline, 0);
+        const allocated = current + 1;
+        const putReq = store.put({ key, roomId, epoch, role: 'host', seq: allocated, updatedAt: Date.now() });
+        await new Promise((res, rej) => {
+          putReq.onsuccess = () => res();
+          putReq.onerror = () => rej(putReq.error);
+        });
+        return allocated;
+      });
+    }
+
+    async function getSequenceBaseline(roomId, epoch) {
+      const key = `${roomId}:${epoch}:host`;
+      const rec = await withIdbStore('readonly', async (store) => {
+        const req = store.get(key);
+        return new Promise((res, rej) => {
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => rej(req.error);
+        });
+      });
+      return (rec && typeof rec.seq === 'number') ? rec.seq : 0;
+    }
+
+    async function runSuite() {
+      // Clean DB before test
+      await new Promise((resolve) => {
+        const delReq = window.indexedDB.deleteDatabase(DB_NAME);
+        delReq.onsuccess = () => resolve();
+        delReq.onerror = () => resolve();
+      });
+
+      check('Environment: Actual window.indexedDB is present', typeof window.indexedDB !== 'undefined');
+
+      // ── Test 1: Real Concurrent Sequence Allocation across Two Concurrent Worker Contexts ──
+      const roomId = 'room-browser-concurrent';
+      const epoch1 = 1;
+
+      // Spawn 2 independent Web Workers that both access the same IndexedDB database
+      const workerCode = `
+        const DB_NAME = '${DB_NAME}';
+        const STORE_NAME = '${STORE_NAME}';
+        function openDb() {
+          return new Promise((resolve, reject) => {
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => {
+              const db = req.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+        }
+        async function allocate(roomId, epoch) {
+          const key = roomId + ':' + epoch + ':host';
+          const db = await openDb();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            let nextSeq;
+            const req = store.get(key);
+            req.onsuccess = () => {
+              const cur = req.result ? req.result.seq : 0;
+              nextSeq = cur + 1;
+              const putReq = store.put({ key, roomId, epoch, seq: nextSeq, updatedAt: Date.now() });
+              putReq.onerror = () => reject(putReq.error);
+            };
+            req.onerror = () => reject(req.error);
+            tx.oncomplete = () => { db.close(); resolve(nextSeq); };
+            tx.onerror = () => { db.close(); reject(tx.error); };
+          });
+        }
+        self.onmessage = async (e) => {
+          const { id, count, roomId, epoch } = e.data;
+          const seqs = [];
+          for (let i = 0; i < count; i++) {
+            seqs.push(await allocate(roomId, epoch));
+          }
+          self.postMessage({ id, seqs });
+        };
+      `;
+
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker1 = new Worker(workerUrl);
+      const worker2 = new Worker(workerUrl);
+
+      // Tab 1 (Worker 1) requests 10 allocations, Tab 2 (Worker 2) requests 10 allocations concurrently
+      const [res1, res2] = await Promise.all([
+        new Promise((res) => {
+          worker1.onmessage = (e) => res(e.data.seqs);
+          worker1.postMessage({ id: 'worker1', count: 10, roomId, epoch: epoch1 });
+        }),
+        new Promise((res) => {
+          worker2.onmessage = (e) => res(e.data.seqs);
+          worker2.postMessage({ id: 'worker2', count: 10, roomId, epoch: epoch1 });
+        })
+      ]);
+
+      worker1.terminate();
+      worker2.terminate();
+      URL.revokeObjectURL(workerUrl);
+
+      const allAllocated = [...res1, ...res2];
+      const uniqueAllocated = new Set(allAllocated);
+
+      check('X1 IDB: 20 concurrent allocations across 2 separate contexts yielded 20 results', allAllocated.length === 20);
+      check('X1 IDB: Zero collisions (20 unique sequence numbers allocated)', uniqueAllocated.size === 20, `(unique count: ${uniqueAllocated.size})`);
+
+      const sorted = [...allAllocated].sort((a, b) => a - b);
+      const isMonotonic = sorted.every((v, i) => v === i + 1);
+      check('X1 IDB: Sequences strictly cover 1 through 20 monotonically', isMonotonic, `(${sorted[0]} to ${sorted[sorted.length - 1]})`);
+
+      // ── Test 2: Epoch Isolation in IndexedDB ──
+      const epoch2Alloc = await allocateHostSequence(roomId, 2, 0);
+      check('X1 IDB: New host epoch 2 starts isolated sequence namespace at 1', epoch2Alloc === 1);
+
+      const epoch1Next = await allocateHostSequence(roomId, 1, 0);
+      check('X1 IDB: Epoch 1 sequence namespace preserved at 21', epoch1Next === 21);
+
+      // ── Test 3: Persistence Across Simulated Reload ──
+      // Close all DB handles and query baseline directly
+      const baselineEpoch1 = await getSequenceBaseline(roomId, 1);
+      check('X1 IDB: Persisted sequence baseline survives reconnection (21)', baselineEpoch1 === 21);
+
+      // ── Test 4: Storage Error Fails Closed ──
+      // Verify that when IndexedDB readwrite transaction is aborted, allocateHostSequence rejects
+      let failedClosed = false;
+      try {
+        await withIdbStore('readwrite', async (store) => {
+          throw new Error('Simulated disk/quota write error');
+        });
+      } catch (err) {
+        failedClosed = true;
+      }
+      check('X1 IDB: Storage error causes transaction rejection (fails closed)', failedClosed);
+
+      // Summary
+      const summaryEl = document.createElement('div');
+      summaryEl.className = failed === 0 ? 'summary ok' : 'summary err';
+      summaryEl.textContent = `INDEXEDDB TEST VERDICT: ${passed} PASSED, ${failed} FAILED`;
+      resultsEl.appendChild(summaryEl);
+
+      window.__idbTestStatus = { passed, failed, done: true };
+    }
+
+    runSuite().catch((e) => {
+      console.error(e);
+      check('Suite execution error', false, e.message);
+      window.__idbTestStatus = { passed, failed, done: true, error: e.message };
+    });
+  </script>
+</body>
+</html>
