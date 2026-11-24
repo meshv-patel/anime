@@ -32,7 +32,7 @@ export function ControlBar(p: Props) {
   const handleVolume = p.viewMode === 'screen' ? (p.onScreenVolume ?? p.onVolume) : p.onVolume;
 
   return (
-    <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-2 pt-10 opacity-100 transition-opacity sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover:opacity-100">
+    <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/40 to-transparent pt-10 opacity-100 transition-opacity pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover:opacity-100">
       {p.viewMode === 'video' && (
         <input type="range" aria-label="Seek" className="mb-1 w-full" min={0} max={st.duration || 0} step={0.5} disabled={!p.canControl || !playable}
           value={drag ?? st.time} title={disabledMsg}

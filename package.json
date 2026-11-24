@@ -26,7 +26,8 @@
     "test:preview": "tsx scripts/fullscreen-preview-test.ts",
     "test:db": "tsx scripts/real-postgres-test.ts",
     "test:remediation": "tsx scripts/security-remediation-test.ts",
-    "test": "npm run test:sync && npm run test:tabs && npm run test:bingo && npm run test:predictions && npm run test:security && npm run test:adversarial && npm run test:realtime && npm run test:screenshare && npm run test:preview && npm run test:furin && npm run test:season && npm run test:ema && npm run test:remediation"
+    "test:diagnostics": "tsx scripts/diagnostics-test.ts",
+    "test": "npm run test:sync && npm run test:tabs && npm run test:bingo && npm run test:predictions && npm run test:security && npm run test:adversarial && npm run test:realtime && npm run test:screenshare && npm run test:preview && npm run test:furin && npm run test:season && npm run test:ema && npm run test:remediation && npm run test:diagnostics"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

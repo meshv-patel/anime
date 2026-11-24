@@ -151,7 +151,11 @@ export function Stage(p: Props) {
   return (
     <div
       ref={p.stageRef}
-      className={`group relative isolate overflow-hidden bg-black ${p.isFs ? 'fixed inset-0 z-50 h-full w-full rounded-none' : `rounded-3xl shadow-[0_30px_80px_-30px_rgba(255,184,107,.35)] ring-1 ring-white/10 ${p.theater ? 'aspect-video max-h-[78vh] w-full' : 'aspect-video w-full'}`}`}
+      className={`group isolate overflow-hidden bg-black ${
+        p.isFs
+          ? 'fixed inset-0 z-50 h-[100dvh] w-screen max-w-[100vw] rounded-none'
+          : `relative rounded-3xl shadow-[0_30px_80px_-30px_rgba(255,184,107,.35)] ring-1 ring-white/10 ${p.theater ? 'aspect-video max-h-[78vh] w-full' : 'aspect-video w-full'}`
+      }`}
     >
       {/* Background Direct Video Player (Secondary) */}
       <video
@@ -172,7 +176,7 @@ export function Stage(p: Props) {
           />
 
           {/* Screen Status Badges & Host Controls */}
-          <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2">
+          <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2 pt-[env(safe-area-inset-top,0px)] pl-[env(safe-area-inset-left,0px)]">
             <span className="flex items-center gap-1.5 rounded-full bg-sakura-500 px-3 py-1 text-xs font-extrabold text-white shadow-lg">
               <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
               {p.screenOwner === 'me' ? 'You are sharing' : `LIVE • ${p.sharerName}'s Screen`}
@@ -195,7 +199,7 @@ export function Stage(p: Props) {
 
           {/* Host Audio Warning Notice (if no audio captured) */}
           {p.screenOwner === 'me' && p.screenAudioWarning && (
-            <div className="absolute top-12 left-3 right-3 z-20 max-w-md pointer-events-none">
+            <div className="absolute top-12 left-3 right-3 z-20 max-w-md pointer-events-none pt-[env(safe-area-inset-top,0px)] pl-[env(safe-area-inset-left,0px)]">
               <div className="text-xs text-amber-200/95 bg-black/85 backdrop-blur-md border border-amber-500/40 rounded-xl p-2.5 shadow-xl pointer-events-auto flex items-start gap-2">
                 <span className="shrink-0 text-sm">💡</span>
                 <p className="flex-1">{p.screenAudioWarning}</p>
@@ -207,7 +211,7 @@ export function Stage(p: Props) {
 
       {/* Top Right Controls: Accessible Fullscreen Button (Mobile & Desktop) */}
       {(hasContent || p.isFs) && (
-        <div className="absolute right-3 top-3 z-30 flex items-center gap-2">
+        <div className="absolute right-3 top-3 z-30 flex items-center gap-2 pt-[env(safe-area-inset-top,0px)] pr-[env(safe-area-inset-right,0px)]">
           <button
             onClick={p.onFs}
             className="flex items-center gap-1.5 rounded-full bg-black/75 hover:bg-black text-white border border-white/25 px-3 py-1.5 text-xs font-bold backdrop-blur-md shadow-lg transition active:scale-95"

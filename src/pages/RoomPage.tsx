@@ -148,37 +148,51 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
   ];
   const sideVisible = panelOpen || theater;
 
+  const handleGetDiagnostics = useCallback(async () => {
+    const base = await S.getDiagnostics();
+    return {
+      ...base,
+      screenAudio: media?.getScreenAudioDiagnostics() ?? null,
+      ema: {
+        ...store.emaDiagnostics,
+        reactStateCount: store.emaList.length
+      }
+    };
+  }, [S, media, store.emaDiagnostics, store.emaList.length]);
+
   return (
-    <div className="relative mx-auto max-w-[1500px] px-3 pb-10 pt-3 sm:px-5">
+    <div className={`relative mx-auto ${isFs ? 'p-0 m-0 max-w-none' : 'max-w-[1500px] px-3 pb-10 pt-3 sm:px-5'}`}>
       <SeasonalAtmosphere />
-      <header className="relative z-10 mb-3 flex flex-wrap items-center gap-3">
-        <Link to="/" className="font-display text-lg font-extrabold">🌸 Anime Together</Link>
-        <ModeBadge />
-        <span role="status" className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${connected ? 'bg-emerald-400/15 text-emerald-300' : 'bg-sakura-500/25 text-sakura-200'}`}>{connected ? <Wifi size={13} /> : <WifiOff size={13} />}{connected ? 'Connected' : S.status === 'connecting' ? 'Connecting…' : S.status === 'reconnecting' ? 'Reconnecting…' : 'Offline'}</span>
-        {S.isHost && (
-          <button
-            className={`btn ${isScreenSharing ? 'bg-sakura-500 text-white hover:bg-sakura-600' : 'btn-lantern'} flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold shadow-md`}
-            onClick={() => void (isScreenSharing ? handleStopScreen() : handleStartScreen())}
-            title={isScreenSharing ? 'Stop screen sharing' : 'Start sharing screen & audio'}
-          >
-            {isScreenSharing ? <MonitorOff size={14} /> : <MonitorUp size={14} />}
-            <span>{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
-          </button>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <div className="flex -space-x-2">{peers.map((p) => <Avatar key={p.clientId} value={p.avatar} size={32} title={p.nickname + (p.userId === S.room!.hostId ? ' (host)' : '')} />)}</div>
-          <Furin />
-          <button className={`icon-btn ${diagOpen ? 'bg-lantern-400 text-ink-950' : ''}`} onClick={() => setDiagOpen(!diagOpen)} aria-label="Toggle diagnostics" title="Toggle diagnostics (Ctrl+Shift+D)"><Activity size={16} /></button>
-          <button className="icon-btn" onClick={() => void navigator.clipboard?.writeText(inviteUrl)} aria-label="Copy invitation link" title="Copy invitation link"><Copy size={16} /></button>
-          <button className={`icon-btn ${theater ? 'bg-lantern-400 text-ink-950' : ''}`} aria-pressed={theater} onClick={() => setTheater(!theater)} aria-label="Theater mode" title="Theater mode">{theater ? <Rows2 size={16} /> : <Clapperboard size={16} />}</button>
-          <button className="icon-btn relative" aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)} aria-label={panelOpen ? 'Collapse side panel' : 'Expand side panel'} title="Toggle side panel">{panelOpen ? <ChevronsRight size={16} /> : <Columns2 size={16} />}
-            {!panelOpen && chat.unread > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-lantern-400 px-1 text-[10px] font-extrabold text-ink-950">{chat.unread}</span>}</button>
-        </div>
-      </header>
+      {!isFs && (
+        <header className="relative z-10 mb-3 flex flex-wrap items-center gap-3">
+          <Link to="/" className="font-display text-lg font-extrabold">🌸 Anime Together</Link>
+          <ModeBadge />
+          <span role="status" className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${connected ? 'bg-emerald-400/15 text-emerald-300' : 'bg-sakura-500/25 text-sakura-200'}`}>{connected ? <Wifi size={13} /> : <WifiOff size={13} />}{connected ? 'Connected' : S.status === 'connecting' ? 'Connecting…' : S.status === 'reconnecting' ? 'Reconnecting…' : 'Offline'}</span>
+          {S.isHost && (
+            <button
+              className={`btn ${isScreenSharing ? 'bg-sakura-500 text-white hover:bg-sakura-600' : 'btn-lantern'} flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold shadow-md`}
+              onClick={() => void (isScreenSharing ? handleStopScreen() : handleStartScreen())}
+              title={isScreenSharing ? 'Stop screen sharing' : 'Start sharing screen & audio'}
+            >
+              {isScreenSharing ? <MonitorOff size={14} /> : <MonitorUp size={14} />}
+              <span>{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
+            </button>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex -space-x-2">{peers.map((p) => <Avatar key={p.clientId} value={p.avatar} size={32} title={p.nickname + (p.userId === S.room!.hostId ? ' (host)' : '')} />)}</div>
+            <Furin />
+            <button className={`icon-btn ${diagOpen ? 'bg-lantern-400 text-ink-950' : ''}`} onClick={() => setDiagOpen(!diagOpen)} aria-label="Toggle diagnostics" title="Toggle diagnostics (Ctrl+Shift+D)"><Activity size={16} /></button>
+            <button className="icon-btn" onClick={() => void navigator.clipboard?.writeText(inviteUrl)} aria-label="Copy invitation link" title="Copy invitation link"><Copy size={16} /></button>
+            <button className={`icon-btn ${theater ? 'bg-lantern-400 text-ink-950' : ''}`} aria-pressed={theater} onClick={() => setTheater(!theater)} aria-label="Theater mode" title="Theater mode">{theater ? <Rows2 size={16} /> : <Clapperboard size={16} />}</button>
+            <button className="icon-btn relative" aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)} aria-label={panelOpen ? 'Collapse side panel' : 'Expand side panel'} title="Toggle side panel">{panelOpen ? <ChevronsRight size={16} /> : <Columns2 size={16} />}
+              {!panelOpen && chat.unread > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-lantern-400 px-1 text-[10px] font-extrabold text-ink-950">{chat.unread}</span>}</button>
+          </div>
+        </header>
+      )}
 
-      {!connected && <p role="alert" className="relative z-10 mb-3 rounded-2xl bg-sakura-500/20 px-4 py-2 text-sm">{S.status === 'offline' ? 'Realtime is unavailable, so nothing you do will reach other people.' : 'Realtime connection interrupted. Reconnecting; playback, chat and reactions may not reach others until it returns.'}</p>}
+      {!isFs && !connected && <p role="alert" className="relative z-10 mb-3 rounded-2xl bg-sakura-500/20 px-4 py-2 text-sm">{S.status === 'offline' ? 'Realtime is unavailable, so nothing you do will reach other people.' : 'Realtime connection interrupted. Reconnecting; playback, chat and reactions may not reach others until it returns.'}</p>}
 
-      <div className={`relative z-10 grid gap-4 ${sideVisible && !theater ? 'lg:grid-cols-[minmax(0,1fr)_380px]' : ''}`}>
+      <div className={`relative z-10 grid gap-4 ${sideVisible && !theater && !isFs ? 'lg:grid-cols-[minmax(0,1fr)_380px]' : ''}`}>
         <main className="min-w-0 space-y-4">
           <Stage
             stageRef={stageRef}
@@ -211,42 +225,46 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
             onPickLocal={pickLocal}
           />
 
-          <section className="panel flex flex-wrap items-center gap-4 p-4">
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-display text-xl font-bold">
-                {isScreenSharing
-                  ? '📺 Sharing your screen & audio'
-                  : remoteSharerId
-                  ? `📺 Watching ${sharerName}'s screen share`
-                  : S.source?.title ?? 'Ready for screen sharing'}
-              </p>
-              <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-paper/60">
-                <span className="flex items-center gap-1"><Crown size={12} className="text-lantern-400" />Host: {host?.nickname ?? 'away'}{S.isHost && ' (you)'}</span>
-                <span>{S.hostOnly ? 'Host controls playback' : 'Everyone can control playback'}</span>
-              </p>
-            </div>
-            <ReactionBar onReact={rx.send} disabled={!connected} />
-          </section>
+          {!isFs && (
+            <>
+              <section className="panel flex flex-wrap items-center gap-4 p-4">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-display text-xl font-bold">
+                    {isScreenSharing
+                      ? '📺 Sharing your screen & audio'
+                      : remoteSharerId
+                      ? `📺 Watching ${sharerName}'s screen share`
+                      : S.source?.title ?? 'Ready for screen sharing'}
+                  </p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-paper/60">
+                    <span className="flex items-center gap-1"><Crown size={12} className="text-lantern-400" />Host: {host?.nickname ?? 'away'}{S.isHost && ' (you)'}</span>
+                    <span>{S.hostOnly ? 'Host controls playback' : 'Everyone can control playback'}</span>
+                  </p>
+                </div>
+                <ReactionBar onReact={rx.send} disabled={!connected} />
+              </section>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <section className="panel p-4">
-              <h2 className="mb-3 font-bold flex items-center justify-between">
-                <span>Watch party audio &amp; video</span>
-                <span className="text-xs font-normal text-paper/50">Primary Experience</span>
-              </h2>
-              <MediaDock media={session.media} peers={peers} myId={session.transport.clientId} isHost={S.isHost} />
-            </section>
-            <section className="panel p-4">
-              <h2 className="mb-3 font-bold flex items-center justify-between">
-                <span>Alternative: Direct video link</span>
-                <span className="text-xs font-normal text-paper/50">MP4 / HLS Stream</span>
-              </h2>
-              <SourceForm canControl={S.canControl} onLoad={loadSource} onLocal={loadLocalAsSource} />
-            </section>
-          </div>
+              <div className="grid gap-4 xl:grid-cols-2">
+                <section className="panel p-4">
+                  <h2 className="mb-3 font-bold flex items-center justify-between">
+                    <span>Watch party audio &amp; video</span>
+                    <span className="text-xs font-normal text-paper/50">Primary Experience</span>
+                  </h2>
+                  <MediaDock media={session.media} peers={peers} myId={session.transport.clientId} isHost={S.isHost} />
+                </section>
+                <section className="panel p-4">
+                  <h2 className="mb-3 font-bold flex items-center justify-between">
+                    <span>Alternative: Direct video link</span>
+                    <span className="text-xs font-normal text-paper/50">MP4 / HLS Stream</span>
+                  </h2>
+                  <SourceForm canControl={S.canControl} onLoad={loadSource} onLocal={loadLocalAsSource} />
+                </section>
+              </div>
+            </>
+          )}
         </main>
 
-        {sideVisible && (
+        {sideVisible && !isFs && (
           <aside className={`panel flex min-h-0 flex-col overflow-hidden ${theater ? 'h-[520px]' : 'h-[560px] lg:sticky lg:top-3 lg:h-[calc(100vh-1.5rem)]'}`} aria-label="Room side panel">
             <div
               ref={tablistRef}
@@ -314,17 +332,7 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
       <DiagnosticsOverlay
         isOpen={diagOpen}
         onClose={() => setDiagOpen(false)}
-        getDiagnostics={async () => {
-          const base = await S.getDiagnostics();
-          return {
-            ...base,
-            screenAudio: media?.getScreenAudioDiagnostics() ?? null,
-            ema: {
-              ...store.emaDiagnostics,
-              reactStateCount: store.emaList.length
-            }
-          };
-        }}
+        getDiagnostics={handleGetDiagnostics}
       />
     </div>
   );

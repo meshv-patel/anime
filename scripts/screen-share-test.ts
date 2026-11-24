@@ -30,6 +30,7 @@ class MockTrack {
   readyState = 'live';
   muted = false;
   displaySurface = 'browser';
+  contentHint = '';
   private listeners: Record<string, Function[]> = {};
 
   constructor(public kind: 'video' | 'audio') {}
@@ -122,6 +123,13 @@ const mockMediaDevices = {
   }
 };
 
+class MockSender {
+  params: any = { encodings: [{}] };
+  constructor(public track: any) {}
+  getParameters() { return JSON.parse(JSON.stringify(this.params)); }
+  async setParameters(p: any) { this.params = p; }
+}
+
 class MockRTCPeerConnection {
   connectionState: RTCPeerConnectionState = 'connected';
   iceConnectionState: RTCIceConnectionState = 'connected';
@@ -132,15 +140,46 @@ class MockRTCPeerConnection {
   onconnectionstatechange: (() => void) | null = null;
   localDescription: any = null;
   remoteDescription: any = null;
-  senders: Array<{ track: any }> = [];
+  senders: Array<any> = [];
 
   addTrack(track: any, stream: any) {
-    const sender = { track };
+    const sender = new MockSender(track);
     this.senders.push(sender);
     return sender;
   }
   removeTrack(sender: any) {
     this.senders = this.senders.filter((s) => s !== sender);
+  }
+  async getStats() {
+    const map = new Map<string, any>();
+    map.set('inbound-video', {
+      type: 'inbound-rtp',
+      kind: 'video',
+      framesDecoded: 120,
+      framesDropped: 2,
+      framesReceived: 122,
+      frameWidth: 1920,
+      frameHeight: 1080,
+      framesPerSecond: 30,
+      jitter: 0.005,
+      jitterBufferDelay: 0.05,
+      jitterBufferEmittedCount: 120,
+      packetsLost: 1,
+      bytesReceived: 1000000,
+      timestamp: 1000
+    });
+    map.set('outbound-video', {
+      type: 'outbound-rtp',
+      kind: 'video',
+      framesSent: 122,
+      frameWidth: 1920,
+      frameHeight: 1080,
+      framesPerSecond: 30,
+      bytesSent: 1000000,
+      qualityLimitationReason: 'none',
+      timestamp: 1000
+    });
+    return map;
   }
   async createOffer() { return { type: 'offer', sdp: 'mock-offer' }; }
   async createAnswer() { return { type: 'answer', sdp: 'mock-answer' }; }
@@ -622,6 +661,56 @@ async function run() {
 
   isoMediaHost.closeAll(); isoTrans1.leave();
   isoMediaGuest.closeAll(); isoTrans2.leave();
+
+  console.log('\n▶ [16] WebRTC Screen-Share Streaming Optimization & Inbound/Outbound Diagnostics');
+  const optTrans1 = new LocalTransport('room-opt-test');
+  const optTrans2 = new LocalTransport('room-opt-test');
+  const optMediaHost = new MediaManager(optTrans1, dummyIce, () => optTrans1.clientId);
+  const optMediaGuest = new MediaManager(optTrans2, dummyIce, () => optTrans1.clientId);
+
+  optTrans1.join({ userId: 'h-opt', nickname: 'Host', avatar: '🌸|#fff', joinedAt: 100 });
+  optTrans2.join({ userId: 'g-opt', nickname: 'Guest', avatar: '🦊|#fff', joinedAt: 200 });
+  optMediaHost.setPeers([optTrans2.clientId]);
+  optMediaGuest.setPeers([optTrans1.clientId]);
+  await sleep(30);
+
+  mockDisplayConstraintsHistory = [];
+  await optMediaHost.start('screen');
+  const hostScreenVid = optMediaHost.local.screen!.getVideoTracks()[0];
+  const lastScreenConstraints = mockDisplayConstraintsHistory[mockDisplayConstraintsHistory.length - 1];
+
+  check('Optimization: Screen capture caps resolution to 1080p ideal / 1440p max in Tier 1',
+    lastScreenConstraints?.video?.width?.ideal === 1920 &&
+    lastScreenConstraints?.video?.width?.max === 2560 &&
+    lastScreenConstraints?.video?.height?.ideal === 1080 &&
+    lastScreenConstraints?.video?.height?.max === 1440
+  );
+  check('Optimization: Screen capture caps framerate to 30 fps max',
+    lastScreenConstraints?.video?.frameRate?.max === 30
+  );
+  check('Optimization: Video track sets contentHint to "motion"',
+    hostScreenVid.contentHint === 'motion'
+  );
+
+  const optSt1 = getPc(optMediaHost, optTrans2.clientId);
+  const screenSenderEntries = optSt1.senders.get('screen') ?? [];
+  const screenVidSender = screenSenderEntries.find((s: any) => s.mediaType === 'video');
+  check('Optimization: Screen video sender has adaptive maxBitrate configured',
+    screenVidSender?.sender?.params?.encodings?.[0]?.maxBitrate >= 3_000_000 &&
+    screenVidSender?.sender?.params?.encodings?.[0]?.maxBitrate <= 4_500_000
+  );
+  check('Optimization: Screen video sender specifies maintain-framerate degradation preference',
+    screenVidSender?.sender?.params?.degradationPreference === 'maintain-framerate'
+  );
+
+  const diagHost = await optMediaHost.getDiagnostics();
+  check('Diagnostics: getDiagnostics() inspects RTP stats without throwing', diagHost.length === 1);
+  check('Diagnostics: Populates inboundVideo telemetry', !!diagHost[0].inboundVideo && diagHost[0].inboundVideo.framesDecoded === 120);
+  check('Diagnostics: Populates outboundVideo telemetry', !!diagHost[0].outboundVideo && diagHost[0].outboundVideo.framesSent === 122);
+  check('Diagnostics: Tracks frame dimensions and framerate in RTP stats', diagHost[0].inboundVideo?.framesPerSecond === 30 && diagHost[0].inboundVideo?.frameWidth === 1920);
+
+  optMediaHost.closeAll(); optTrans1.leave();
+  optMediaGuest.closeAll(); optTrans2.leave();
 
   console.log('\n════════════════════════════════════════════════════════════════');
   console.log(`  SCREEN SHARING TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);

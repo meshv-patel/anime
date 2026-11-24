@@ -23,22 +23,35 @@ export function useFullscreen(ref: RefObject<HTMLElement>) {
     };
   }, [ref]);
 
-  // Lock body scroll and allow Escape key to exit fallback fullscreen
+  // Lock body & document scroll and allow Escape key or orientation change handling
   useEffect(() => {
     if (!fallbackFs) return;
-    const prevOverflow = document.body.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevDocOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setFallbackFs(false);
       }
     };
+    const onOrientation = () => {
+      // Re-evaluate scroll lock on mobile orientation flip
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+    };
+
     window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onOrientation);
+    window.addEventListener('orientationchange', onOrientation);
 
     return () => {
-      document.body.style.overflow = prevOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevDocOverflow;
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onOrientation);
+      window.removeEventListener('orientationchange', onOrientation);
     };
   }, [fallbackFs]);
 
@@ -86,5 +99,5 @@ export function useFullscreen(ref: RefObject<HTMLElement>) {
   }, [ref, fallbackFs]);
 
   const supported = true; // Always supported via native API or CSS fallback
-  return { isFs: isFs || fallbackFs, toggle, supported, isFallback: fallbackFs };
+  return { isFs: isFs || fallbackFs, toggle, supported, isFallback: fallbackFs, isImmersive: fallbackFs };
 }

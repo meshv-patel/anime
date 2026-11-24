@@ -83,8 +83,19 @@ check(
 // 3. Inspect Fullscreen CSS Fallback in Stage.tsx
 console.log('\n▶ [3] Validating CSS Fullscreen Fallback Styling in Stage.tsx');
 check(
-  'Stage applies fixed inset-0 z-50 h-full w-full rounded-none when p.isFs is true',
-  stageFile.includes("p.isFs ? 'fixed inset-0 z-50 h-full w-full rounded-none'")
+  'Stage applies fixed inset-0 z-50 h-[100dvh] w-screen max-w-[100vw] rounded-none when p.isFs is true',
+  stageFile.includes("p.isFs") && stageFile.includes("'fixed inset-0 z-50 h-[100dvh] w-screen max-w-[100vw] rounded-none'")
+);
+
+check(
+  'Stage avoids Tailwind positioning collision by making "relative" mutually exclusive with "fixed"',
+  !stageFile.includes('relative group isolate overflow-hidden bg-black') &&
+  stageFile.includes(": `relative rounded-3xl")
+);
+
+check(
+  'Stage respects safe-area insets for top controls and warnings',
+  stageFile.includes('safe-area-inset-top') && stageFile.includes('safe-area-inset-left') && stageFile.includes('safe-area-inset-right')
 );
 
 // 4. Inspect useFullscreen.ts Logic
@@ -97,8 +108,14 @@ check(
 );
 
 check(
-  'useFullscreen locks body scroll (overflow = hidden) during fallback fullscreen',
-  fsFile.includes("document.body.style.overflow = 'hidden'")
+  'useFullscreen locks body and documentElement scroll during fallback fullscreen',
+  fsFile.includes("document.body.style.overflow = 'hidden'") &&
+  fsFile.includes("document.documentElement.style.overflow = 'hidden'")
+);
+
+check(
+  'useFullscreen listens for resize and orientationchange events',
+  fsFile.includes("'resize'") && fsFile.includes("'orientationchange'")
 );
 
 check(
@@ -116,13 +133,35 @@ check(
   fsFile.includes('setFallbackFs(true)')
 );
 
-// 5. Inspect ControlBar.tsx
-console.log('\n▶ [5] Validating ControlBar.tsx Fullscreen Control');
+check(
+  'useFullscreen exposes isFallback / isImmersive status',
+  fsFile.includes('isFallback: fallbackFs') && fsFile.includes('isImmersive: fallbackFs')
+);
+
+// 5. Inspect ControlBar.tsx, index.html, and RoomPage.tsx
+console.log('\n▶ [5] Validating ControlBar, Viewport Meta, and RoomPage Fullscreen Isolation');
 const cbFile = fs.readFileSync(path.resolve(process.cwd(), 'src/components/ControlBar.tsx'), 'utf-8');
+const indexHtml = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf-8');
+const roomPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/RoomPage.tsx'), 'utf-8');
 
 check(
   'ControlBar renders desktop/bottom fullscreen control via p.fsSupported',
   cbFile.includes('p.fsSupported &&') && cbFile.includes('p.onFs')
+);
+
+check(
+  'ControlBar applies safe-area padding for mobile home indicator',
+  cbFile.includes('safe-area-inset-bottom')
+);
+
+check(
+  'index.html includes viewport-fit=cover meta tag',
+  indexHtml.includes('viewport-fit=cover')
+);
+
+check(
+  'RoomPage suppresses surrounding UI (header, aside, panels) when fullscreen is active',
+  roomPage.includes('!isFs && (') && roomPage.includes("isFs ? 'p-0 m-0 max-w-none'")
 );
 
 console.log(`\n════════════════════════════════════════════════════════════════`);
