@@ -279,7 +279,28 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
             <div className="min-h-0 flex-1 overflow-y-auto">
               {tab === 'chat' && <Chat messages={chat.messages} myClientId={session.transport.clientId} typingNames={chat.typingNames} onSend={chat.send} onTyping={chat.notifyTyping} disabled={!connected} />}
               {tab === 'list' && <WatchlistPanel items={store.watch} error={store.error} onAdd={store.addWatch} onUpdate={store.updateWatch} onRemove={store.removeWatch} />}
-              {tab === 'moments' && <MomentsPanel items={store.moments} canSeek={S.canControl} hasVideo={!!S.source} onSave={(note) => store.addMoment({ note, position: session.sync.currentTime(), sourceTitle: S.source?.title ?? '' })} onSeek={(t) => session.sync.seek(t)} onRemove={store.removeMoment} />}
+              {tab === 'moments' && (
+                <MomentsPanel
+                  items={store.moments}
+                  error={store.error}
+                  canSeek={S.canControl}
+                  hasVideo={!!S.source}
+                  onSave={async (note) => {
+                    try {
+                      await store.addMoment({
+                        note,
+                        position: S.source ? session.sync.currentTime() : 0,
+                        sourceTitle: S.source?.title ?? ''
+                      });
+                      return true;
+                    } catch {
+                      return false;
+                    }
+                  }}
+                  onSeek={(t) => session.sync.seek(t)}
+                  onRemove={store.removeMoment}
+                />
+              )}
               {tab === 'ema' && <EmaPanel items={store.emaList} currentUserId={session.userId} authorNickname={profile.nickname} isDemo={!liveConfigured} error={store.error} roomId={roomId} diagnostics={store.emaDiagnostics} onReload={store.reload} onAdd={store.addEma} onRemove={store.removeEma} />}
               {tab === 'games' && <GamesPanel session={session} roomId={roomId} userId={session.userId} nickname={profile.nickname} avatar={profile.avatar} isHost={S.isHost} />}
               {tab === 'room' && <RoomPanel inviteUrl={inviteUrl} peers={peers} myClientId={session.transport.clientId} hostId={S.room.hostId} isHost={S.isHost} hostOnly={S.hostOnly} prefs={prefs}
@@ -297,6 +318,7 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
           const base = await S.getDiagnostics();
           return {
             ...base,
+            screenAudio: media?.getScreenAudioDiagnostics() ?? null,
             ema: {
               ...store.emaDiagnostics,
               reactStateCount: store.emaList.length

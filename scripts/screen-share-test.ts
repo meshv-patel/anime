@@ -28,6 +28,8 @@ class MockTrack {
   id = 'track-' + Math.random().toString(36).slice(2);
   enabled = true;
   readyState = 'live';
+  muted = false;
+  displaySurface = 'browser';
   private listeners: Record<string, Function[]> = {};
 
   constructor(public kind: 'video' | 'audio') {}
@@ -43,11 +45,23 @@ class MockTrack {
     this.readyState = 'ended';
     (this.listeners['ended'] || []).forEach((fn) => fn());
   }
+  mute() {
+    this.muted = true;
+    (this.listeners['mute'] || []).forEach((fn) => fn());
+  }
+  unmute() {
+    this.muted = false;
+    (this.listeners['unmute'] || []).forEach((fn) => fn());
+  }
+  getSettings() {
+    return { displaySurface: this.displaySurface };
+  }
 }
 
 class MockMediaStream {
   id = 'stream-' + Math.random().toString(36).slice(2);
   private tracks: MockTrack[] = [];
+  private listeners: Record<string, Function[]> = {};
 
   constructor(tracks: MockTrack[] = []) {
     this.tracks = tracks;
@@ -56,20 +70,45 @@ class MockMediaStream {
   getTracks() { return [...this.tracks]; }
   getVideoTracks() { return this.tracks.filter((t) => t.kind === 'video'); }
   getAudioTracks() { return this.tracks.filter((t) => t.kind === 'audio'); }
-  addTrack(t: MockTrack) { this.tracks.push(t); }
+  addTrack(t: MockTrack) {
+    this.tracks.push(t);
+    (this.listeners['addtrack'] || []).forEach((fn) => fn({ track: t }));
+  }
+  removeTrack(t: MockTrack) {
+    this.tracks = this.tracks.filter((x) => x !== t);
+    (this.listeners['removetrack'] || []).forEach((fn) => fn({ track: t }));
+  }
+  addEventListener(event: string, fn: Function) {
+    if (!this.listeners[event]) this.listeners[event] = [];
+    this.listeners[event].push(fn);
+  }
+  removeEventListener(event: string, fn: Function) {
+    this.listeners[event] = (this.listeners[event] || []).filter((l) => l !== fn);
+  }
 }
 
 let mockDisplayAudioIncluded = true;
 let mockDisplayMediaShouldFail = false;
+let mockDisplayFailTier1 = false;
+let mockDisplaySurfaceType = 'browser';
+let mockDisplayConstraintsHistory: any[] = [];
 
 const mockMediaDevices = {
   async getDisplayMedia(constraints?: any) {
+    mockDisplayConstraintsHistory.push(constraints);
     if (mockDisplayMediaShouldFail) {
       const err = new Error('Permission denied');
       err.name = 'NotAllowedError';
       throw err;
     }
-    const tracks: MockTrack[] = [new MockTrack('video')];
+    if (mockDisplayFailTier1 && constraints?.systemAudio) {
+      const err = new Error('Invalid constraint');
+      err.name = 'TypeError';
+      throw err;
+    }
+    const vTrack = new MockTrack('video');
+    vTrack.displaySurface = mockDisplaySurfaceType;
+    const tracks: MockTrack[] = [vTrack];
     if (mockDisplayAudioIncluded) {
       tracks.push(new MockTrack('audio'));
     }
@@ -185,7 +224,7 @@ async function run() {
 
   await hostMedia.start('screen');
   check('Host is sharing video without audio', hostMedia.isLocal('screen') && !hostMedia.hasScreenAudio());
-  check('Host receives helpful audio warning to select Browser Tab', typeof hostMedia.screenAudioWarning === 'string' && hostMedia.screenAudioWarning.includes('Browser Tab'));
+  check('Host receives helpful audio warning to select Browser Tab', typeof hostMedia.screenAudioWarning === 'string' && hostMedia.screenAudioWarning.toLowerCase().includes('browser tab'));
 
   console.log('\n▶ [4] Simultaneous Voice Chat & Screen Share');
   // Host and Guest both enable mic while screen share is active
@@ -354,6 +393,235 @@ async function run() {
 
   secHostMedia.closeAll(); secHostTrans.leave();
   secGuestMedia.closeAll(); secGuestTrans.leave();
+
+  console.log('\n▶ [10] Audio Track Ending Mid-Sharing (Video Continues, Audio Transitions to Ended)');
+  mockDisplayMediaShouldFail = false;
+  mockDisplayAudioIncluded = true;
+  mockDisplayFailTier1 = false;
+
+  const testTrans1 = new LocalTransport('room-audio-ended-test');
+  const testTrans2 = new LocalTransport('room-audio-ended-test');
+  const testMediaHost = new MediaManager(testTrans1, dummyIce, () => testTrans1.clientId);
+  const testMediaGuest = new MediaManager(testTrans2, dummyIce, () => testTrans1.clientId);
+
+  testTrans1.join({ userId: 'u1', nickname: 'Host', avatar: '🌸|#fff', joinedAt: 100 });
+  testTrans2.join({ userId: 'u2', nickname: 'Guest', avatar: '🦊|#fff', joinedAt: 200 });
+  testMediaHost.setPeers([testTrans2.clientId]);
+  testMediaGuest.setPeers([testTrans1.clientId]);
+  await sleep(30);
+
+  await testMediaHost.start('screen');
+  check('Audio-ended test: Host started sharing with audio', testMediaHost.hasScreenAudio());
+  check('Audio-ended test: Initial audioStatus is "active"', testMediaHost.getScreenState().audioStatus === 'active');
+
+  const hostAudioTrack = testMediaHost.local.screen!.getAudioTracks()[0];
+  const hostVideoTrack = testMediaHost.local.screen!.getVideoTracks()[0];
+  check('Audio-ended test: Audio track exists', Boolean(hostAudioTrack));
+
+  // Simulate audio track ending during share (e.g. user unshared tab audio)
+  hostAudioTrack.stop();
+  await sleep(30);
+
+  check('Audio-ended test: Video track is still live after audio track ended', hostVideoTrack.readyState === 'live');
+  check('Audio-ended test: Screen share is still active (video continues)', testMediaHost.isLocal('screen'));
+  check('Audio-ended test: hasScreenAudio() is now false', !testMediaHost.hasScreenAudio());
+  check('Audio-ended test: audioStatus transitioned to "ended"', testMediaHost.getScreenState().audioStatus === 'ended');
+  check('Audio-ended test: Warning informs host that audio track ended', typeof testMediaHost.screenAudioWarning === 'string' && testMediaHost.screenAudioWarning.includes('ended'));
+
+  testMediaHost.closeAll(); testTrans1.leave();
+  testMediaGuest.closeAll(); testTrans2.leave();
+
+  console.log('\n▶ [11] Repeated Start/Stop Screen Sharing (No Duplicate Audio Senders)');
+  const repTrans1 = new LocalTransport('room-repeat-share-test');
+  const repTrans2 = new LocalTransport('room-repeat-share-test');
+  const repMediaHost = new MediaManager(repTrans1, dummyIce, () => repTrans1.clientId);
+  const repMediaGuest = new MediaManager(repTrans2, dummyIce, () => repTrans1.clientId);
+
+  repTrans1.join({ userId: 'r1', nickname: 'Host', avatar: '🌸|#fff', joinedAt: 100 });
+  repTrans2.join({ userId: 'r2', nickname: 'Guest', avatar: '🦊|#fff', joinedAt: 200 });
+  repMediaHost.setPeers([repTrans2.clientId]);
+  repMediaGuest.setPeers([repTrans1.clientId]);
+  await sleep(30);
+
+  // Cycle 1
+  await repMediaHost.start('screen');
+  await sleep(20);
+  repMediaHost.stop('screen');
+
+  // Cycle 2
+  await repMediaHost.start('screen');
+  await sleep(20);
+  repMediaHost.stop('screen');
+
+  // Cycle 3
+  await repMediaHost.start('screen');
+  await sleep(20);
+
+  const pcSenders = (repMediaHost as any).pcs.get(repTrans2.clientId)?.senders.get('screen') ?? [];
+  check('Repeat test: Screen is currently sharing', repMediaHost.isLocal('screen'));
+  check('Repeat test: Exactly 2 senders registered for peer (1 video, 1 audio; no duplicates)', pcSenders.length === 2);
+  check('Repeat test: Host screen has exactly 1 audio track and 1 video track', repMediaHost.local.screen!.getAudioTracks().length === 1 && repMediaHost.local.screen!.getVideoTracks().length === 1);
+
+  repMediaHost.closeAll(); repTrans1.leave();
+  repMediaGuest.closeAll(); repTrans2.leave();
+
+  console.log('\n▶ [12] Safari-Style Video-Only Capture (Tier-1 Fallback, Friendly Warning)');
+  mockDisplayFailTier1 = true;
+  mockDisplayAudioIncluded = false;
+  mockDisplaySurfaceType = 'window';
+
+  const safariTrans1 = new LocalTransport('room-safari-test');
+  const safariMediaHost = new MediaManager(safariTrans1, dummyIce, () => safariTrans1.clientId);
+  safariTrans1.join({ userId: 'safari-host', nickname: 'SafariHost', avatar: '🍎|#fff', joinedAt: 100 });
+
+  await safariMediaHost.start('screen');
+  check('Safari test: Screen share succeeded via progressive fallback', safariMediaHost.isLocal('screen'));
+  check('Safari test: Video track captured', safariMediaHost.local.screen!.getVideoTracks().length === 1);
+  check('Safari test: Audio track is not present (as in Safari/WebKit)', safariMediaHost.local.screen!.getAudioTracks().length === 0);
+  check('Safari test: hasScreenAudio() is false', !safariMediaHost.hasScreenAudio());
+  check('Safari test: audioStatus reports "missing"', safariMediaHost.getScreenState().audioStatus === 'missing');
+  check('Safari test: Warning advises sharing browser tab in Chrome or Brave', safariMediaHost.screenAudioWarning === 'Your browser or selected sharing source did not provide audio. Try sharing a browser tab in Chrome or Brave.');
+
+  safariMediaHost.closeAll(); safariTrans1.leave();
+  mockDisplayFailTier1 = false;
+  mockDisplayAudioIncluded = true;
+  mockDisplaySurfaceType = 'browser';
+
+  console.log('\n▶ [13] Chromium-Style Tab Audio Capture (Stereo Audio Hints & displaySurface)');
+  mockDisplayConstraintsHistory = [];
+  const chromeTrans1 = new LocalTransport('room-chrome-test');
+  const chromeMediaHost = new MediaManager(chromeTrans1, dummyIce, () => chromeTrans1.clientId);
+  chromeTrans1.join({ userId: 'chrome-host', nickname: 'ChromeHost', avatar: '💻|#fff', joinedAt: 100 });
+
+  await chromeMediaHost.start('screen');
+  const lastConstraints = mockDisplayConstraintsHistory[mockDisplayConstraintsHistory.length - 1];
+
+  check('Chrome test: Initial getDisplayMedia constraints requested systemAudio: "include"', lastConstraints?.systemAudio === 'include');
+  check('Chrome test: selfBrowserSurface: "exclude" hint provided', lastConstraints?.selfBrowserSurface === 'exclude');
+  check('Chrome test: surfaceSwitching: "include" hint provided', lastConstraints?.surfaceSwitching === 'include');
+  check('Chrome test: audio constraints requested stereo/high-fidelity audio', lastConstraints?.audio?.echoCancellation === false);
+  check('Chrome test: Screen sharing is active with audio', chromeMediaHost.hasScreenAudio());
+  check('Chrome test: screenAudioWarning is null', chromeMediaHost.screenAudioWarning === null);
+
+  chromeMediaHost.closeAll(); chromeTrans1.leave();
+
+  console.log('\n▶ [14] Audio Status & Diagnostics Telemetry (getScreenAudioDiagnostics)');
+  const diagTrans1 = new LocalTransport('room-diag-test');
+  const diagTrans2 = new LocalTransport('room-diag-test');
+  const diagMediaHost = new MediaManager(diagTrans1, dummyIce, () => diagTrans1.clientId);
+  const diagMediaGuest = new MediaManager(diagTrans2, dummyIce, () => diagTrans1.clientId);
+
+  diagTrans1.join({ userId: 'dh', nickname: 'Host', avatar: '🌸|#fff', joinedAt: 100 });
+  diagTrans2.join({ userId: 'dg', nickname: 'Guest', avatar: '🦊|#fff', joinedAt: 200 });
+  diagMediaHost.setPeers([diagTrans2.clientId]);
+  diagMediaGuest.setPeers([diagTrans1.clientId]);
+  await sleep(30);
+
+  await diagMediaHost.start('screen');
+  const diag = diagMediaHost.getScreenAudioDiagnostics();
+
+  check('Diagnostics: Detects browser string', typeof diag.browser === 'string');
+  check('Diagnostics: displaySurface is "browser"', diag.displaySurface === 'browser');
+  check('Diagnostics: hasAudioTrack is true', diag.hasAudioTrack === true);
+  check('Diagnostics: audioStatus is "active"', diag.audioStatus === 'active');
+  check('Diagnostics: videoTracksCount is 1', diag.videoTracksCount === 1);
+  check('Diagnostics: audioTracksCount is 1', diag.audioTracksCount === 1);
+  check('Diagnostics: addedToPeers is true', diag.addedToPeers === true);
+  check('Diagnostics: Event log records screen events', diag.eventsLog.length > 0);
+  check('Diagnostics: Event log contains "capture-requested" and "audio-captured"', diag.eventsLog.some((e) => e.type === 'capture-requested') && diag.eventsLog.some((e) => e.type === 'audio-captured'));
+
+  diagMediaHost.closeAll(); diagTrans1.leave();
+  diagMediaGuest.closeAll(); diagTrans2.leave();
+
+  console.log('\n▶ [15] Strict RTCRtpSender Isolation: Independent Microphone, Screen Audio, and Video');
+  const isoTrans1 = new LocalTransport('room-iso-test');
+  const isoTrans2 = new LocalTransport('room-iso-test');
+  const isoMediaHost = new MediaManager(isoTrans1, dummyIce, () => isoTrans1.clientId);
+  const isoMediaGuest = new MediaManager(isoTrans2, dummyIce, () => isoTrans1.clientId);
+
+  isoTrans1.join({ userId: 'h-iso', nickname: 'Host', avatar: '🌸|#fff', joinedAt: 100 });
+  isoTrans2.join({ userId: 'g-iso', nickname: 'Guest', avatar: '🦊|#fff', joinedAt: 200 });
+  isoMediaHost.setPeers([isoTrans2.clientId]);
+  isoMediaGuest.setPeers([isoTrans1.clientId]);
+  await sleep(30);
+
+  const getPc = (m: MediaManager, peerId: string) => (m as any).pcs.get(peerId);
+
+  // 1. Start microphone alone
+  await isoMediaHost.start('mic');
+  const hostMicTrack = isoMediaHost.local.mic!.getAudioTracks()[0];
+  const st1 = getPc(isoMediaHost, isoTrans2.clientId);
+  const micSenders = st1.senders.get('mic') ?? [];
+
+  check('Isolation: Mic is local active', isoMediaHost.isLocal('mic'));
+  check('Isolation: Mic sender allocated under "mic"', micSenders.length === 1);
+  check('Isolation: Mic sender track matches mic audio track', micSenders[0].trackId === hostMicTrack.id);
+  check('Isolation: Mic sender mediaType is "audio"', micSenders[0].mediaType === 'audio');
+
+  // 2. Start screen sharing with video + audio while mic is already active
+  await isoMediaHost.start('screen');
+  const hostScreenVidTrack = isoMediaHost.local.screen!.getVideoTracks()[0];
+  const hostScreenAudTrack = isoMediaHost.local.screen!.getAudioTracks()[0];
+  const screenSenders = st1.senders.get('screen') ?? [];
+  const micSendersAfterScreenStart = st1.senders.get('mic') ?? [];
+
+  check('Isolation: Screen is local active with video & audio', isoMediaHost.isLocal('screen') && isoMediaHost.hasScreenAudio());
+  check('Isolation: Screen senders allocated under "screen" (1 video, 1 audio)', screenSenders.length === 2);
+  check('Isolation: Mic sender was NOT removed when screen share started', micSendersAfterScreenStart.length === 1 && micSendersAfterScreenStart[0].trackId === hostMicTrack.id);
+  check('Isolation: PC total senders includes both mic and screen (total 3)', st1.pc.senders.length === 3);
+
+  // 3. Start webcam (cam) while both mic and screen are active
+  await isoMediaHost.start('cam');
+  const camSenders = st1.senders.get('cam') ?? [];
+  check('Isolation: Cam sender allocated under "cam"', camSenders.length === 1);
+  check('Isolation: Cam start did NOT disturb mic sender', st1.senders.get('mic')?.length === 1);
+  check('Isolation: Cam start did NOT disturb screen senders', st1.senders.get('screen')?.length === 2);
+  check('Isolation: PC total senders is now 4 (1 mic audio, 1 screen audio, 1 screen video, 1 cam video)', st1.pc.senders.length === 4);
+
+  // 4. Stop screen sharing: must remove only screen senders (video & audio), keeping mic and cam
+  isoMediaHost.stop('screen');
+  check('Isolation: Screen share is stopped', !isoMediaHost.isLocal('screen'));
+  check('Isolation: Screen senders deleted from senders map', !st1.senders.has('screen'));
+  check('Isolation: Stopping screen sharing PRESERVED mic sender', st1.senders.get('mic')?.length === 1 && st1.senders.get('mic')[0].trackId === hostMicTrack.id);
+  check('Isolation: Stopping screen sharing PRESERVED cam sender', st1.senders.get('cam')?.length === 1);
+  check('Isolation: PC total senders reduced from 4 to 2 (only screen tracks removed)', st1.pc.senders.length === 2);
+
+  // 5. Restart screen sharing: must not create duplicate senders
+  await isoMediaHost.start('screen');
+  check('Isolation: Screen re-started', isoMediaHost.isLocal('screen'));
+  check('Isolation: Screen senders count is exactly 2 (no duplicates)', st1.senders.get('screen')?.length === 2);
+  check('Isolation: Mic sender remains exactly 1 (no duplicates)', st1.senders.get('mic')?.length === 1);
+  check('Isolation: Cam sender remains exactly 1 (no duplicates)', st1.senders.get('cam')?.length === 1);
+  check('Isolation: Total senders on PC is 4', st1.pc.senders.length === 4);
+
+  // 6. Stop microphone: must remove only mic sender, keeping screen (video + audio) and cam
+  isoMediaHost.stop('mic');
+  check('Isolation: Mic stopped', !isoMediaHost.isLocal('mic'));
+  check('Isolation: Mic senders deleted from senders map', !st1.senders.has('mic'));
+  check('Isolation: Stopping mic PRESERVED screen senders (both video and audio intact)', st1.senders.get('screen')?.length === 2);
+  check('Isolation: Stopping mic PRESERVED cam sender', st1.senders.get('cam')?.length === 1);
+  check('Isolation: PC total senders reduced to 3 (only mic track removed)', st1.pc.senders.length === 3);
+
+  // 7. Restart microphone: must re-add mic sender cleanly without touching screen
+  await isoMediaHost.start('mic');
+  check('Isolation: Mic re-started', isoMediaHost.isLocal('mic'));
+  check('Isolation: Mic senders count is exactly 1', st1.senders.get('mic')?.length === 1);
+  check('Isolation: Screen senders remain exactly 2', st1.senders.get('screen')?.length === 2);
+  check('Isolation: Cam sender remains exactly 1', st1.senders.get('cam')?.length === 1);
+  check('Isolation: Total senders on PC restored to 4', st1.pc.senders.length === 4);
+
+  // 8. Test audio mute and transmissionState
+  const newScreenAudioTrack = isoMediaHost.local.screen!.getAudioTracks()[0];
+  newScreenAudioTrack.mute();
+  check('Status test: Screen audioStatus is "muted" when track is muted', isoMediaHost.getScreenState().audioStatus === 'muted');
+  check('Status test: hasScreenAudio() is false when track is muted', !isoMediaHost.hasScreenAudio());
+
+  newScreenAudioTrack.unmute();
+  check('Status test: Screen audioStatus returns to "active" when unmuted', isoMediaHost.getScreenState().audioStatus === 'active');
+  check('Status test: hasScreenAudio() returns true when unmuted', isoMediaHost.hasScreenAudio());
+
+  isoMediaHost.closeAll(); isoTrans1.leave();
+  isoMediaGuest.closeAll(); isoTrans2.leave();
 
   console.log('\n════════════════════════════════════════════════════════════════');
   console.log(`  SCREEN SHARING TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);

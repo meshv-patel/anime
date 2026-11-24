@@ -41,14 +41,28 @@ function StreamVideo({
     el.srcObject = stream;
     el.volume = volume;
     el.muted = muted ?? false;
-    const p = el.play();
-    if (p !== undefined) {
-      p.catch((err) => {
-        if (err.name === 'NotAllowedError') {
-          setAutoplayBlocked(true);
-        }
-      });
-    }
+    const play = () => {
+      const p = el.play();
+      if (p !== undefined) {
+        p.catch((err) => {
+          if (err.name === 'NotAllowedError') {
+            setAutoplayBlocked(true);
+          }
+        });
+      }
+    };
+    play();
+
+    const handleTrackChange = () => {
+      if (el.srcObject !== stream) el.srcObject = stream;
+      play();
+    };
+    stream.addEventListener('addtrack', handleTrackChange);
+    stream.addEventListener('removetrack', handleTrackChange);
+    return () => {
+      stream.removeEventListener('addtrack', handleTrackChange);
+      stream.removeEventListener('removetrack', handleTrackChange);
+    };
   }, [stream]);
 
   useEffect(() => {

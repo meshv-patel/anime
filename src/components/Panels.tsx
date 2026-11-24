@@ -17,24 +17,58 @@ import {
 
 const fmt = (s: number) => { const t = Math.floor(s); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return `${h ? h + ':' + String(m).padStart(2, '0') : m}:${String(x).padStart(2, '0')}`; };
 
-export function WatchlistPanel({ items, error, onAdd, onUpdate, onRemove }: { items: WatchItem[]; error: string; onAdd(t: string): void; onUpdate(id: string, p: Partial<Pick<WatchItem, 'status' | 'progress'>>): void; onRemove(id: string): void }) {
+export function WatchlistPanel({ items, error, onAdd, onUpdate, onRemove }: { items: WatchItem[]; error: string; onAdd(t: string): Promise<void> | void; onUpdate(id: string, p: Partial<Pick<WatchItem, 'status' | 'progress'>>): Promise<void> | void; onRemove(id: string): Promise<void> | void }) {
   const [t, setT] = useState('');
-  const add = () => { if (t.trim()) { onAdd(t); setT(''); } };
+  const [saving, setSaving] = useState(false);
+
+  const add = async () => {
+    const val = t.trim();
+    if (!val || saving) return;
+    setSaving(true);
+    try {
+      await onAdd(val);
+      setT('');
+    } catch {
+      // Retain typed text on failure
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdate = async (id: string, p: Partial<Pick<WatchItem, 'status' | 'progress'>>) => {
+    try {
+      await onUpdate(id, p);
+    } catch {
+      // Error captured in store.error and displayed via error prop
+    }
+  };
+
+  const handleRemove = async (id: string) => {
+    try {
+      await onRemove(id);
+    } catch {
+      // Error captured in store.error and displayed via error prop
+    }
+  };
+
   return (
     <div className="space-y-3 p-4">
-      <div className="flex gap-2"><input className="field py-2.5" placeholder="Add an anime" aria-label="Anime title" value={t} maxLength={120} onChange={(e) => setT(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} /><button className="icon-btn" onClick={add} aria-label="Add to watchlist"><Plus size={18} /></button></div>
+      <div className="flex gap-2">
+        <input className="field py-2.5" placeholder="Add an anime" aria-label="Anime title" value={t} maxLength={120} onChange={(e) => setT(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void add()} />
+        <button className="icon-btn" disabled={saving} onClick={() => void add()} aria-label="Add to watchlist"><Plus size={18} /></button>
+      </div>
       {error && <p role="alert" className="text-xs text-sakura-300">{error}</p>}
       {items.length === 0 && <p className="py-6 text-center text-sm text-paper/50">Nothing here yet. Add the first show you want to watch together.</p>}
       <ul className="space-y-2">
         {items.map((w) => (
           <li key={w.id} className="rounded-2xl bg-white/5 p-3">
-            <div className="flex items-start justify-between gap-2"><p className="break-words text-sm font-bold">{w.title}</p><button className="text-paper/40 hover:text-sakura-300" onClick={() => onRemove(w.id)} aria-label={`Remove ${w.title}`}><Trash2 size={15} /></button></div>
+            <div className="flex items-start justify-between gap-2"><p className="break-words text-sm font-bold">{w.title}</p><button className="text-paper/40 hover:text-sakura-300" onClick={() => void handleRemove(w.id)} aria-label={`Remove ${w.title}`}><Trash2 size={15} /></button></div>
             <div className="mt-2 flex items-center gap-2 text-xs">
-              <select className="rounded-lg bg-ink-900 px-2 py-1" value={w.status} aria-label="Status" onChange={(e) => onUpdate(w.id, { status: e.target.value as WatchItem['status'] })}><option value="planned">Planned</option><option value="watching">Watching</option><option value="done">Finished</option></select>
+              <select className="rounded-lg bg-ink-900 px-2 py-1" value={w.status} aria-label="Status" onChange={(e) => void handleUpdate(w.id, { status: e.target.value as WatchItem['status'] })}><option value="planned">Planned</option><option value="watching">Watching</option><option value="done">Finished</option></select>
               <span className="ml-auto text-paper/60">Episode</span>
-              <button className="icon-btn !h-7 !w-7" aria-label="Previous episode" onClick={() => onUpdate(w.id, { progress: Math.max(0, w.progress - 1) })}>−</button>
+              <button className="icon-btn !h-7 !w-7" aria-label="Previous episode" onClick={() => void handleUpdate(w.id, { progress: Math.max(0, w.progress - 1) })}>−</button>
               <span className="w-6 text-center font-bold tabular-nums">{w.progress}</span>
-              <button className="icon-btn !h-7 !w-7" aria-label="Next episode" onClick={() => onUpdate(w.id, { progress: w.progress + 1 })}>+</button>
+              <button className="icon-btn !h-7 !w-7" aria-label="Next episode" onClick={() => void handleUpdate(w.id, { progress: w.progress + 1 })}>+</button>
             </div>
           </li>
         ))}
@@ -43,19 +77,45 @@ export function WatchlistPanel({ items, error, onAdd, onUpdate, onRemove }: { it
   );
 }
 
-export function MomentsPanel({ items, canSeek, hasVideo, onSave, onSeek, onRemove }: { items: Moment[]; canSeek: boolean; hasVideo: boolean; onSave(note: string): void; onSeek(t: number): void; onRemove(id: string): void }) {
+export function MomentsPanel({ items, error, canSeek, hasVideo, onSave, onSeek, onRemove }: { items: Moment[]; error?: string; canSeek: boolean; hasVideo?: boolean; onSave(note: string): Promise<boolean> | boolean | Promise<void> | void; onSeek(t: number): void; onRemove(id: string): Promise<void> | void }) {
   const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const ok = await onSave(note);
+      if (ok === true) {
+        setNote('');
+      }
+    } catch {
+      // Retain note in input on failure so user does not lose text
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemove = async (id: string) => {
+    try {
+      await onRemove(id);
+    } catch {
+      // Error captured in store.error and displayed via error prop
+    }
+  };
+
   return (
     <div className="space-y-3 p-4">
-      <div className="flex gap-2"><input className="field py-2.5" placeholder="Note for this moment (optional)" aria-label="Moment note" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
-        <button className="btn-lantern !px-4" disabled={!hasVideo} title={hasVideo ? undefined : 'Load a video first'} onClick={() => { onSave(note); setNote(''); }}><Bookmark size={16} /> Save</button></div>
+      <div className="flex gap-2"><input className="field py-2.5" placeholder="Note for this moment (optional)" aria-label="Moment note" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void handleSave()} />
+        <button className="btn-lantern !px-4" disabled={saving} onClick={() => void handleSave()}><Bookmark size={16} /> Save</button></div>
+      {error && <p role="alert" className="text-xs text-sakura-300">{error}</p>}
       {items.length === 0 && <p className="py-6 text-center text-sm text-paper/50">Save a timestamp when something unforgettable happens.</p>}
       <ul className="space-y-2">
         {items.map((m) => (
           <li key={m.id} className="flex items-center gap-2 rounded-2xl bg-white/5 p-3">
             <button className="rounded-full bg-lantern-400/20 px-3 py-1 text-xs font-bold tabular-nums text-lantern-300 disabled:opacity-40" disabled={!canSeek} title={canSeek ? 'Jump everyone to this moment' : 'Only the host can seek'} onClick={() => onSeek(m.position)}>{fmt(m.position)}</button>
             <div className="min-w-0 flex-1"><p className="truncate text-sm">{m.note || 'Memorable moment'}</p><p className="truncate text-xs text-paper/50">{m.sourceTitle}</p></div>
-            <button className="text-paper/40 hover:text-sakura-300" onClick={() => onRemove(m.id)} aria-label="Delete moment"><Trash2 size={15} /></button>
+            <button className="text-paper/40 hover:text-sakura-300" onClick={() => void handleRemove(m.id)} aria-label="Delete moment"><Trash2 size={15} /></button>
           </li>
         ))}
       </ul>

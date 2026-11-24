@@ -2,6 +2,23 @@ import type { Transport } from '../realtime/transport';
 
 export type MediaKind = 'mic' | 'cam' | 'screen';
 export interface RemoteMedia { mic?: MediaStream; cam?: MediaStream; screen?: MediaStream }
+export type ScreenAudioStatus = 'active' | 'muted' | 'ended' | 'missing' | 'failed';
+
+export interface ScreenAudioDiagnostics {
+  browser: string;
+  displaySurface?: string;
+  hasAudioTrack: boolean;
+  audioStatus: ScreenAudioStatus;
+  transmissionState: 'transmitting' | 'connecting' | 'local-only' | 'none';
+  videoTracksCount: number;
+  audioTracksCount: number;
+  videoTrackState?: string;
+  audioTrackState?: string;
+  audioTrackMuted?: boolean;
+  addedToPeers: boolean;
+  peersCount: number;
+  eventsLog: Array<{ timestamp: number; type: string; detail?: string }>;
+}
 
 export interface PeerDiagnostic {
   peerId: string;
@@ -17,9 +34,16 @@ export interface PeerDiagnostic {
   bytesSent?: number;
 }
 
+export interface TrackSender {
+  sender: RTCRtpSender;
+  trackId: string;
+  kind: MediaKind;
+  mediaType: 'audio' | 'video';
+}
+
 interface PeerState {
   pc: RTCPeerConnection; polite: boolean; makingOffer: boolean; ignoreOffer: boolean;
-  senders: Map<MediaKind, RTCRtpSender[]>;
+  senders: Map<MediaKind, TrackSender[]>;
   candidateQueue: RTCIceCandidateInit[];
 }
 
@@ -52,7 +76,11 @@ export class MediaManager {
   remote = new Map<string, RemoteMedia>();
   lastError: MediaError | null = null;
   screenAudioWarning: string | null = null;
+  screenAudioStatus: ScreenAudioStatus = 'missing';
   lastScreenState: 'idle' | 'sharing' | 'connecting' | 'ended' | 'failed' = 'idle';
+  private screenAudioEvents: Array<{ timestamp: number; type: string; detail?: string }> = [];
+  private screenDisplaySurface?: string;
+  private audioTrackListeners = new Map<MediaStreamTrack, { ended: () => void; mute: () => void; unmute: () => void }>();
   private announced = new Map<string, Record<string, MediaKind>>(); // peer -> streamId -> kind
   private orphans = new Map<string, MediaStream>();                  // `${peer}:${streamId}` -> stream, awaiting `mm`
   private pcs = new Map<string, PeerState>();
@@ -82,6 +110,27 @@ export class MediaManager {
     return { secure: window.isSecureContext, webrtc: typeof RTCPeerConnection !== 'undefined', screen: !!md?.getDisplayMedia, usermedia: !!md?.getUserMedia };
   }
 
+  /** Detect browser family for diagnostics and telemetry. */
+  static detectBrowser(): string {
+    if (typeof navigator === 'undefined') return 'unknown';
+    const ua = navigator.userAgent || '';
+    if (/Edg\//.test(ua)) return 'Edge';
+    if ((navigator as any).brave && typeof (navigator as any).brave.isBrave === 'function') return 'Brave';
+    if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) return 'Chrome';
+    if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) return 'Safari';
+    if (/Firefox\//.test(ua)) return 'Firefox';
+    return 'Other';
+  }
+
+  private logScreenEvent(type: string, detail?: string) {
+    const entry = { timestamp: Date.now(), type, detail };
+    this.screenAudioEvents.push(entry);
+    if (this.screenAudioEvents.length > 50) this.screenAudioEvents.shift();
+    if (typeof console !== 'undefined' && console.info) {
+      console.info(`[media:screen] ${type}${detail ? ` - ${detail}` : ''}`);
+    }
+  }
+
   /** Who is sharing a screen right now (clientId), based on announcements and host authorization. */
   remoteSharer(): string | null {
     const hostClientId = this.getHostClientId ? this.getHostClientId() : null;
@@ -94,14 +143,16 @@ export class MediaManager {
   }
   isLocal(kind: MediaKind) { return !!this.local[kind]; }
 
-  /** Check if the screen stream (local or remote) contains an active audio track. */
+  /** Check if the screen stream (local or remote) contains an active live audio track. */
   hasScreenAudio(clientId?: string): boolean {
     if (!clientId || clientId === this.t.clientId) {
       const s = this.local.screen;
-      return Boolean(s && s.getAudioTracks().length > 0);
+      if (!s) return false;
+      return s.getAudioTracks().some((t) => t.readyState === 'live' && !t.muted && t.enabled);
     }
     const rem = this.remote.get(clientId)?.screen;
-    return Boolean(rem && rem.getAudioTracks().length > 0);
+    if (!rem) return false;
+    return rem.getAudioTracks().some((t) => t.readyState === 'live' && !t.muted && t.enabled);
   }
 
   /** Current screen sharing lifecycle state for UI indicators. */
@@ -110,14 +161,48 @@ export class MediaManager {
     sharerId: string | null;
     isLocal: boolean;
     hasAudio: boolean;
+    audioStatus: ScreenAudioStatus;
+    transmissionState: 'transmitting' | 'connecting' | 'local-only' | 'none';
     warning: string | null;
   } {
     if (this.isLocal('screen')) {
+      const hasAudio = this.hasScreenAudio();
+      let audioStatus = this.screenAudioStatus;
+      let transmissionState: 'transmitting' | 'connecting' | 'local-only' | 'none' = 'none';
+
+      const audioTracks = this.local.screen?.getAudioTracks() ?? [];
+      if (audioTracks.length === 0) {
+        audioStatus = 'missing';
+        transmissionState = 'none';
+      } else if (audioTracks.some((t) => t.readyState === 'ended')) {
+        audioStatus = 'ended';
+        transmissionState = 'none';
+      } else if (audioTracks.some((t) => t.muted || !t.enabled)) {
+        audioStatus = 'muted';
+        transmissionState = 'none';
+      } else if (hasAudio) {
+        audioStatus = 'active';
+        if (this.pcs.size === 0) {
+          transmissionState = 'local-only';
+        } else {
+          let hasConnectedPeer = false;
+          for (const st of this.pcs.values()) {
+            if (st.pc.connectionState === 'connected') {
+              hasConnectedPeer = true;
+              break;
+            }
+          }
+          transmissionState = hasConnectedPeer ? 'transmitting' : 'connecting';
+        }
+      }
+
       return {
         state: 'sharing',
         sharerId: this.t.clientId,
         isLocal: true,
-        hasAudio: this.hasScreenAudio(),
+        hasAudio,
+        audioStatus,
+        transmissionState,
         warning: this.screenAudioWarning
       };
     }
@@ -126,20 +211,110 @@ export class MediaManager {
       const rem = this.remote.get(remoteId)?.screen;
       const pc = this.pcs.get(remoteId)?.pc;
       if (pc && pc.connectionState === 'failed') {
-        return { state: 'failed', sharerId: remoteId, isLocal: false, hasAudio: false, warning: 'WebRTC connection to host failed.' };
+        return {
+          state: 'failed',
+          sharerId: remoteId,
+          isLocal: false,
+          hasAudio: false,
+          audioStatus: 'failed',
+          transmissionState: 'none',
+          warning: 'WebRTC connection to host failed.'
+        };
       }
       if (rem) {
-        return { state: 'sharing', sharerId: remoteId, isLocal: false, hasAudio: this.hasScreenAudio(remoteId), warning: null };
+        const hasAudio = this.hasScreenAudio(remoteId);
+        const remAudioTracks = rem.getAudioTracks();
+        let remStatus: ScreenAudioStatus = 'missing';
+        if (remAudioTracks.length === 0) {
+          remStatus = 'missing';
+        } else if (remAudioTracks.some((t) => t.readyState === 'ended')) {
+          remStatus = 'ended';
+        } else if (remAudioTracks.some((t) => t.muted || !t.enabled)) {
+          remStatus = 'muted';
+        } else if (hasAudio) {
+          remStatus = 'active';
+        }
+        return {
+          state: 'sharing',
+          sharerId: remoteId,
+          isLocal: false,
+          hasAudio,
+          audioStatus: remStatus,
+          transmissionState: hasAudio ? 'transmitting' : 'none',
+          warning: null
+        };
       }
-      return { state: 'connecting', sharerId: remoteId, isLocal: false, hasAudio: false, warning: null };
+      return {
+        state: 'connecting',
+        sharerId: remoteId,
+        isLocal: false,
+        hasAudio: false,
+        audioStatus: 'missing',
+        transmissionState: 'connecting',
+        warning: null
+      };
     }
     if (this.lastScreenState === 'ended') {
-      return { state: 'ended', sharerId: null, isLocal: false, hasAudio: false, warning: null };
+      return {
+        state: 'ended',
+        sharerId: null,
+        isLocal: false,
+        hasAudio: false,
+        audioStatus: this.screenAudioStatus,
+        transmissionState: 'none',
+        warning: null
+      };
     }
     if (this.lastScreenState === 'failed') {
-      return { state: 'failed', sharerId: null, isLocal: false, hasAudio: false, warning: this.lastError?.message ?? null };
+      return {
+        state: 'failed',
+        sharerId: null,
+        isLocal: false,
+        hasAudio: false,
+        audioStatus: 'failed',
+        transmissionState: 'none',
+        warning: this.lastError?.message ?? null
+      };
     }
-    return { state: 'idle', sharerId: null, isLocal: false, hasAudio: false, warning: null };
+    return {
+      state: 'idle',
+      sharerId: null,
+      isLocal: false,
+      hasAudio: false,
+      audioStatus: 'missing',
+      transmissionState: 'none',
+      warning: null
+    };
+  }
+
+  /** Retrieve full diagnostics regarding screen-share audio capture and WebRTC transmission. */
+  getScreenAudioDiagnostics(): ScreenAudioDiagnostics {
+    const screen = this.local.screen;
+    const videoTrack = screen?.getVideoTracks()[0];
+    const audioTrack = screen?.getAudioTracks()[0];
+    let peersWithAudio = 0;
+    for (const st of this.pcs.values()) {
+      const senders = st.senders.get('screen') ?? [];
+      if (senders.some((ts) => ts.mediaType === 'audio')) {
+        peersWithAudio++;
+      }
+    }
+    const state = this.getScreenState();
+    return {
+      browser: MediaManager.detectBrowser(),
+      displaySurface: this.screenDisplaySurface ?? videoTrack?.getSettings?.()?.displaySurface,
+      hasAudioTrack: this.hasScreenAudio(),
+      audioStatus: state.audioStatus,
+      transmissionState: state.transmissionState,
+      videoTracksCount: screen ? screen.getVideoTracks().length : 0,
+      audioTracksCount: screen ? screen.getAudioTracks().length : 0,
+      videoTrackState: videoTrack?.readyState,
+      audioTrackState: audioTrack?.readyState,
+      audioTrackMuted: audioTrack?.muted,
+      addedToPeers: peersWithAudio > 0,
+      peersCount: this.pcs.size,
+      eventsLog: [...this.screenAudioEvents]
+    };
   }
 
   setPeers(ids: string[]) {
@@ -171,7 +346,8 @@ export class MediaManager {
     let stream: MediaStream;
     try {
       if (kind === 'screen') {
-        const displayOpts: any = {
+        this.logScreenEvent('capture-requested', `Browser: ${MediaManager.detectBrowser()}`);
+        const displayOptsTier1: any = {
           video: { frameRate: { ideal: 30, max: 60 } },
           audio: {
             echoCancellation: false,
@@ -179,23 +355,91 @@ export class MediaManager {
             autoGainControl: false
           },
           systemAudio: 'include',
-          selfBrowserSurface: 'exclude'
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include'
         };
         try {
-          stream = await navigator.mediaDevices.getDisplayMedia(displayOpts);
-        } catch (displayErr: any) {
-          if (displayErr?.name === 'OverconstrainedError' || displayErr?.name === 'TypeError') {
-            stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          stream = await navigator.mediaDevices.getDisplayMedia(displayOptsTier1);
+        } catch (displayErr1: any) {
+          if (
+            displayErr1?.name === 'OverconstrainedError' ||
+            displayErr1?.name === 'TypeError' ||
+            displayErr1?.name === 'NotSupportedError'
+          ) {
+            this.logScreenEvent('capture-fallback-tier2', displayErr1.message);
+            try {
+              stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            } catch (displayErr2: any) {
+              if (
+                displayErr2?.name === 'OverconstrainedError' ||
+                displayErr2?.name === 'TypeError' ||
+                displayErr2?.name === 'NotSupportedError'
+              ) {
+                this.logScreenEvent('capture-fallback-tier3-video-only', displayErr2.message);
+                stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+              } else {
+                throw displayErr2;
+              }
+            }
           } else {
-            throw displayErr;
+            throw displayErr1;
           }
         }
-        const hasAudio = stream.getAudioTracks().length > 0;
-        if (!hasAudio) {
-          this.screenAudioWarning = "No audio captured. When sharing an anime tab or window, select 'Browser Tab' and check 'Also share tab audio'.";
-        } else {
-          this.screenAudioWarning = null;
+
+        const videoTracks = stream.getVideoTracks();
+        if (videoTracks.length === 0) {
+          throw new MediaError('other', 'No video track was captured from the display.');
         }
+
+        const audioTracks = stream.getAudioTracks();
+        const displaySurface = videoTracks[0]?.getSettings?.()?.displaySurface;
+        this.screenDisplaySurface = displaySurface;
+
+        if (audioTracks.length > 0) {
+          const audioTrack = audioTracks[0];
+          this.screenAudioStatus = 'active';
+          this.screenAudioWarning = null;
+          this.logScreenEvent('audio-captured', `Tracks: ${audioTracks.length}, surface: ${displaySurface ?? 'unknown'}`);
+
+          const onAudioEnded = () => {
+            this.logScreenEvent('audio-track-ended', `Audio track ${audioTrack.id} ended`);
+            this.screenAudioStatus = 'ended';
+            this.screenAudioWarning = "Screen audio track ended or was disconnected. Video continues sharing.";
+            for (const st of this.pcs.values()) {
+              const senders = st.senders.get('screen') ?? [];
+              const remaining: TrackSender[] = [];
+              for (const ts of senders) {
+                if (ts.trackId === audioTrack.id || ts.sender.track === audioTrack) {
+                  try { st.pc.removeTrack(ts.sender); } catch {}
+                } else {
+                  remaining.push(ts);
+                }
+              }
+              st.senders.set('screen', remaining);
+            }
+            this.notify();
+          };
+
+          const onAudioMute = () => {
+            this.logScreenEvent('audio-track-muted', `Audio track ${audioTrack.id} muted`);
+            this.notify();
+          };
+
+          const onAudioUnmute = () => {
+            this.logScreenEvent('audio-track-unmuted', `Audio track ${audioTrack.id} unmuted`);
+            this.notify();
+          };
+
+          audioTrack.addEventListener('ended', onAudioEnded);
+          audioTrack.addEventListener('mute', onAudioMute);
+          audioTrack.addEventListener('unmute', onAudioUnmute);
+          this.audioTrackListeners.set(audioTrack, { ended: onAudioEnded, mute: onAudioMute, unmute: onAudioUnmute });
+        } else {
+          this.screenAudioStatus = 'missing';
+          this.screenAudioWarning = "Your browser or selected sharing source did not provide audio. Try sharing a browser tab in Chrome or Brave.";
+          this.logScreenEvent('audio-missing', `No audio tracks returned. Surface: ${displaySurface ?? 'unknown'}`);
+        }
+
         this.lastScreenState = 'sharing';
       } else {
         stream = await navigator.mediaDevices.getUserMedia(kind === 'mic'
@@ -206,11 +450,17 @@ export class MediaManager {
     } catch (e) {
       const err = describeMediaError(e, kind);
       this.lastError = err;
-      if (kind === 'screen') this.lastScreenState = 'failed';
+      if (kind === 'screen') {
+        this.screenAudioStatus = 'failed';
+        this.lastScreenState = 'failed';
+      }
       throw err;
     }
     // The browser/OS can end a share (e.g. "Stop sharing" bar). Detect and clean up.
-    stream.getVideoTracks()[0]?.addEventListener('ended', () => this.stop(kind));
+    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+      this.logScreenEvent('video-track-ended', 'Screen sharing stopped by user or browser');
+      this.stop(kind);
+    });
     this.local[kind] = stream;
     this.announce();
     for (const id of this.peerIds) this.addTo(id, kind, stream);
@@ -223,10 +473,19 @@ export class MediaManager {
     delete this.local[kind];
     if (kind === 'screen') {
       this.screenAudioWarning = null;
+      this.screenAudioStatus = 'missing';
+      this.screenDisplaySurface = undefined;
       this.lastScreenState = 'ended';
+      this.logScreenEvent('screen-stopped');
+      for (const [track, listeners] of this.audioTrackListeners) {
+        track.removeEventListener('ended', listeners.ended);
+        track.removeEventListener('mute', listeners.mute);
+        track.removeEventListener('unmute', listeners.unmute);
+      }
+      this.audioTrackListeners.clear();
     }
     for (const st of this.pcs.values()) {
-      for (const sender of st.senders.get(kind) ?? []) { try { st.pc.removeTrack(sender); } catch { /* already gone */ } }
+      for (const ts of st.senders.get(kind) ?? []) { try { st.pc.removeTrack(ts.sender); } catch { /* already gone */ } }
       st.senders.delete(kind);
     }
     s.getTracks().forEach((t) => t.stop());
@@ -349,7 +608,31 @@ export class MediaManager {
   }
   private addTo(id: string, kind: MediaKind, stream: MediaStream) {
     const st = this.pcs.get(id) ?? this.createPc(id);
-    st.senders.set(kind, stream.getTracks().map((tr) => st.pc.addTrack(tr, stream)));
+    const existing = st.senders.get(kind);
+    if (existing && existing.length > 0) {
+      for (const ts of existing) {
+        try { st.pc.removeTrack(ts.sender); } catch { /* ignore */ }
+      }
+      st.senders.delete(kind);
+    }
+    const senders: TrackSender[] = [];
+    for (const tr of stream.getTracks()) {
+      try {
+        const sender = st.pc.addTrack(tr, stream);
+        senders.push({
+          sender,
+          trackId: tr.id,
+          kind,
+          mediaType: tr.kind as 'audio' | 'video'
+        });
+        if (kind === 'screen') {
+          this.logScreenEvent('track-added-to-peer', `Peer: ${id}, track: ${tr.kind} (${tr.id})`);
+        }
+      } catch (e) {
+        console.warn(`[media] Failed to add track ${tr.kind} to peer ${id}`, e);
+      }
+    }
+    st.senders.set(kind, senders);
   }
   private dropPeer(id: string) {
     const st = this.pcs.get(id);

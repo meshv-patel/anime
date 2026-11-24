@@ -236,25 +236,11 @@ drop policy if exists "room members receive" on realtime.messages;
 drop policy if exists "room members send" on realtime.messages;
 
 create policy "room members receive" on realtime.messages for select to authenticated using (
-  realtime.topic() like 'room:%' and (
-    public.is_member(split_part(realtime.topic(), ':', 2))
-    or exists (
-      select 1 from public.room_members m
-      where m.room_id = split_part(realtime.topic(), ':', 2)
-        and m.user_id = auth.uid()
-    )
-  )
+  realtime.topic() like 'room:%' and public.is_member(split_part(realtime.topic(), ':', 2))
 );
 
 create policy "room members send" on realtime.messages for insert to authenticated with check (
-  realtime.topic() like 'room:%' and (
-    public.is_member(split_part(realtime.topic(), ':', 2))
-    or exists (
-      select 1 from public.room_members m
-      where m.room_id = split_part(realtime.topic(), ':', 2)
-        and m.user_id = auth.uid()
-    )
-  )
+  realtime.topic() like 'room:%' and public.is_member(split_part(realtime.topic(), ':', 2))
 );
 
 -- ───────────── Safe Room Projection ─────────────
@@ -380,12 +366,6 @@ begin
   select * into r from public.rooms where id = p_room and expires_at > now() for update;
   if not found or r.host_id <> auth.uid() then raise exception 'Only the host can change host-only controls'; end if;
   if p_host_only is null then raise exception 'host_only flag must not be null'; end if;
-  update public.rooms set host_only = p_host_only where id = p_room returning * into r;
-  return public.safe_room_json(r);
-end $$;
-begin
-  select * into r from public.rooms where id = p_room and expires_at > now() for update;
-  if not found or r.host_id <> auth.uid() then raise exception 'Only the host can change host-only controls'; end if;
   update public.rooms set host_only = p_host_only where id = p_room returning * into r;
   return public.safe_room_json(r);
 end $$;
@@ -539,6 +519,7 @@ begin
 
   return false;
 end $$;
+REVOKE EXECUTE ON FUNCTION public.has_bingo_line(uuid) FROM PUBLIC, anon, authenticated;
 
 create or replace function public.mark_bingo_square(p_game uuid, p_board uuid, p_index int) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -850,10 +831,6 @@ begin
 
   return to_jsonb(pred);
 end $$;
-  end loop;
-
-  return to_jsonb(pred);
-end $$;
 
 -- DB-02: get_room_leaderboard with membership check
 create or replace function public.get_room_leaderboard(p_room text) returns jsonb
@@ -899,7 +876,20 @@ grant execute on function public.create_room(text), public.join_room(text, text)
   public.submit_prediction_answer(uuid, text), public.lock_prediction(uuid),
   public.reveal_prediction(uuid), public.resolve_prediction(uuid, text),
   public.get_room_leaderboard(text) to authenticated;
-grant execute on function public.is_member(text), public.is_host(text) to authenticated, anon;
+
+REVOKE EXECUTE ON FUNCTION public.is_member(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.is_host(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_member(text), public.is_host(text) TO authenticated, anon;
+
+-- Direct table access for authenticated client operations
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.watchlist_items TO authenticated;
+GRANT SELECT, INSERT, DELETE ON public.saved_moments TO authenticated;
+
+GRANT SELECT ON public.bingo_games TO authenticated;
+GRANT SELECT ON public.bingo_boards TO authenticated;
+GRANT SELECT ON public.bingo_marks TO authenticated;
+GRANT SELECT ON public.predictions TO authenticated;
+GRANT SELECT ON public.prediction_answers TO authenticated;
 
 -- ───────────── Phase 3C: Ema Wish Board (絵馬) ─────────────
 create table if not exists public.ema_cards (
@@ -966,3 +956,4 @@ create policy ema_delete on public.ema_cards
   );
 
 grant select, insert, delete on public.ema_cards to authenticated;
+REVOKE EXECUTE ON FUNCTION public.set_ema_author_info() FROM PUBLIC, anon, authenticated;

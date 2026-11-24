@@ -59,6 +59,7 @@ export function useRoomStore(roomId: string, session: Session | null) {
   }, [session, load]);
 
   const run = (ping: 'wl' | 'mom' | 'ema', fn: () => Promise<void>) => async () => {
+    setError('');
     try {
       await fn();
       await load();
@@ -74,7 +75,10 @@ export function useRoomStore(roomId: string, session: Session | null) {
     addWatch: (t: string) => run('wl', () => store.addWatch(t.trim().slice(0, 120)))(),
     updateWatch: (id: string, p: Partial<Pick<WatchItem, 'status' | 'progress'>>) => run('wl', () => store.updateWatch(id, p))(),
     removeWatch: (id: string) => run('wl', () => store.removeWatch(id))(),
-    addMoment: (m: Omit<Moment, 'id' | 'createdAt'>) => run('mom', () => store.addMoment(m))(),
+    addMoment: async (m: Omit<Moment, 'id' | 'createdAt'>): Promise<boolean> => {
+      await run('mom', () => store.addMoment(m))();
+      return true;
+    },
     removeMoment: (id: string) => run('mom', () => store.removeMoment(id))(),
     addEma: (ema: { message: string; authorNickname: string; theme: EmaTheme; category: EmaCategory; authorId?: string }) =>
       run('ema', () => store.addEma({ ...ema, authorId: ema.authorId ?? session?.userId }))(),

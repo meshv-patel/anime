@@ -81,19 +81,29 @@ export function MediaDock({ media, peers, myId, isHost }: { media: MediaManager;
 
       {/* Screen Sharing Status & Audio Warnings */}
       {isScreenLocal && (
-        <div className="rounded-xl bg-sakura-500/20 p-3 text-sm text-sakura-200 space-y-1">
-          <p className="font-bold flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-sakura-400 animate-pulse" />
-            You are sharing your screen
-            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${hasLocalScreenAudio ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}`}>
+        <div className="rounded-xl bg-sakura-500/20 p-3 text-sm text-sakura-200 space-y-2">
+          <div className="font-bold flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-sakura-400 animate-pulse" />
+              You are sharing your screen
+            </span>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${hasLocalScreenAudio ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}`}>
               {hasLocalScreenAudio ? <Volume2 size={12} /> : <VolumeX size={12} />}
               {hasLocalScreenAudio ? 'Audio active' : 'No audio track'}
             </span>
-          </p>
+          </div>
           {media.screenAudioWarning && (
-            <p className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2">
-              💡 {media.screenAudioWarning}
-            </p>
+            <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 space-y-1.5">
+              <p className="flex items-start gap-1.5 font-medium">
+                <span className="shrink-0 text-sm">💡</span>
+                <span>{media.screenAudioWarning}</span>
+              </p>
+              {!hasLocalScreenAudio && (
+                <p className="text-[11px] text-paper/70 border-t border-amber-500/20 pt-1.5">
+                  <strong>Voice chat note:</strong> You can use the separate <strong>Mic on</strong> button below to speak with everyone in the room while sharing, but microphone voice chat will not broadcast the show's internal tab or system audio.
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -104,9 +114,9 @@ export function MediaDock({ media, peers, myId, isHost }: { media: MediaManager;
             <span className="h-2 w-2 rounded-full bg-sakura-400 animate-pulse" />
             {nameOf(remoteSharer)} is sharing their screen
           </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${hasRemoteScreenAudio ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/10 text-paper/70'}`}>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${hasRemoteScreenAudio ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-white/10 text-paper/70'}`}>
             {hasRemoteScreenAudio ? <Volume2 size={12} /> : <VolumeX size={12} />}
-            {hasRemoteScreenAudio ? 'Audio stream' : 'No audio'}
+            {hasRemoteScreenAudio ? 'Stereo audio' : 'No audio'}
           </span>
         </div>
       )}
