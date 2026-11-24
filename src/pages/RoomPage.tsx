@@ -132,6 +132,18 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
     }
   }, [tab]);
 
+  const handleGetDiagnostics = useCallback(async () => {
+    const base = await S.getDiagnostics();
+    return {
+      ...base,
+      screenAudio: media?.getScreenAudioDiagnostics() ?? null,
+      ema: {
+        ...store.emaDiagnostics,
+        reactStateCount: store.emaList.length
+      }
+    };
+  }, [S, media, store.emaDiagnostics, store.emaList.length]);
+
   if (S.phase === 'error') return <Fail msg={S.error} />;
   if (S.phase === 'loading' || !session || !S.room) return <div className="grid min-h-screen place-items-center"><span className="h-10 w-10 animate-spin rounded-full border-4 border-white/20 border-t-lantern-400" role="status" aria-label="Joining room" /></div>;
 
@@ -147,18 +159,6 @@ function RoomView({ roomId, profile }: { roomId: string; profile: Profile }) {
     ['room', 'Room', <Settings size={16} />]
   ];
   const sideVisible = panelOpen || theater;
-
-  const handleGetDiagnostics = useCallback(async () => {
-    const base = await S.getDiagnostics();
-    return {
-      ...base,
-      screenAudio: media?.getScreenAudioDiagnostics() ?? null,
-      ema: {
-        ...store.emaDiagnostics,
-        reactStateCount: store.emaList.length
-      }
-    };
-  }, [S, media, store.emaDiagnostics, store.emaList.length]);
 
   return (
     <div className={`relative mx-auto ${isFs ? 'p-0 m-0 max-w-none' : 'max-w-[1500px] px-3 pb-10 pt-3 sm:px-5'}`}>
